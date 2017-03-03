@@ -24,7 +24,7 @@ Usage: sync-push [options]
 Watch and sync files from current directory to a remote directory
 
 Options:
-help			  print this message
+help			print this message
 --delete		delete extraneous files from destination dirs
 --version		print version number
 ```
