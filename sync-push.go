@@ -7,7 +7,6 @@ import (
   "os"
   "os/exec"
   "path/filepath"
-  "log"
   "fmt"
   "reflect"
   "strings"
@@ -31,17 +30,19 @@ var IGNORE_FLAG map[bool][]string = map[bool][]string{
 }
 
 func printVersion() {
-  log.Println("sync-watch version 0.0.1")
+  fmt.Println("sync-watch version 0.0.1")
+  os.Exit(0)
 }
 
 func printHelp() {
-  usage := "Usage: sync-push [options]\n"
+  usage := "Usage: sync-push [options]"
   description := "Watch and sync files from current directory to a remote directory"
-  options := "help\tprint this message\n"
-  options += "--delete\tdelete extraneous files from destination dirs\n"
-  options += "--version\tprint version number\n"
+  options := "help\t\t\tprint this message\n"
+  options += "--delete\t\tdelete extraneous files from destination dirs\n"
+  options += "--version\t\tprint version number"
   // TODO check -C, --cvs-exclude
-  log.Println(usage + description + options)
+  fmt.Printf("%s\n%s\n\nOptions:\n%s\n", usage, description, options)
+  os.Exit(0)
 }
 
 func panicIfErr(err error) {
@@ -189,7 +190,8 @@ func watch(path string, handler func(interface{})) error {
 
 func checkPushCmd() {
   if err := exec.Command(PUSH_CMD, "--version").Run(); err != nil {
-    log.Fatal("rsync is not installed. For information on how to install it on your OS, ask Google")
+    fmt.Printf("%s is not installed. For information on how to install it on your OS, ask Google\n", PUSH_CMD)
+    os.Exit(1)
   }
 }
 
