@@ -17,8 +17,8 @@ import (
 
 const LOCATIONS_FILE string = "/locations.ini"
 const PUSH_CMD string = "rsync"
-var PUSH_OPTS map[string]bool = map[string]bool {
-  "--delete": true,
+var PUSH_OPTS map[string][]string = map[string][]string {
+  "--delete": {"--delete", "--force"},
 }
 var GENERAL_OPTS map[string]func() = map[string]func() {
   "help": printHelp,
@@ -153,10 +153,10 @@ func push(local, remote string, shouldIgnore bool, options []string) func(interf
       cmdOptions = append(cmdOptions, IGNORE_FLAG[shouldIgnore]...)
     }
 
-    out, err := exec.Command(PUSH_CMD, cmdOptions...).Output()
+    out, err := exec.Command(PUSH_CMD, cmdOptions...).CombinedOutput()
+    fmt.Println(string(string(out)))
     // TODO add better error handling
     panicIfErr(err)
-    fmt.Println(string(string(out)))
   }
 }
 
@@ -202,9 +202,9 @@ func main() {
 
   // TODO read command line arguments: remote -v, remote set, remote remove
   pushOpts := make([]string, 0)
-  for i, opt := range os.Args[1:] {
-    if _, ok := PUSH_OPTS[opt]; ok {
-      pushOpts = append(pushOpts, os.Args[i+1])
+  for _, opt := range os.Args[1:] {
+    if pushOpt, ok := PUSH_OPTS[opt]; ok {
+      pushOpts = append(pushOpts, pushOpt...)
     } else if handler, ok := GENERAL_OPTS[opt]; ok {
       handler()
     } else {

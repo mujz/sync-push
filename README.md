@@ -25,7 +25,7 @@ Watch and sync files from current directory to a remote directory
 
 Options:
 help			print this message
---delete		delete extraneous files from destination dirs
+--delete		delete extraneous files and dirs from destination dirs. Use with caution.
 --version		print version number
 ```
 
