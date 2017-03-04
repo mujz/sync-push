@@ -154,6 +154,7 @@ func push(local, remote string, shouldIgnore bool, options []string) func(interf
     }
 
     out, err := exec.Command(PUSH_CMD, cmdOptions...).Output()
+    // TODO add better error handling
     panicIfErr(err)
     fmt.Println(string(string(out)))
   }
