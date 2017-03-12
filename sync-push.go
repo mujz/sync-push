@@ -1,21 +1,22 @@
 package main
-// TODO FIX watcher firing after every other event, not after every event
 
 import (
-  "bufio"
   "io/ioutil"
   "os"
   "os/exec"
   "path/filepath"
   "fmt"
-  "reflect"
   "strings"
+  "sync"
   "time"
 
+  "github.com/mujz/sync-push/util"
   "github.com/fsnotify/fsnotify"
 )
 
+const ENTER_REMOTE_PROMPT = "Remote Location (eg. user@host:/path/to/remote/dir): "
 const LOCATIONS_FILE string = "/locations.ini"
+const IGNORE_FILE_NAME string = ".syncignore"
 const PUSH_CMD string = "rsync"
 var PUSH_OPTS map[string][]string = map[string][]string {
   "--delete": {"--delete", "--force"},
@@ -23,10 +24,6 @@ var PUSH_OPTS map[string][]string = map[string][]string {
 var GENERAL_OPTS map[string]func() = map[string]func() {
   "help": printHelp,
   "--version": printVersion,
-}
-var IGNORE_FLAG map[bool][]string = map[bool][]string{
-  true: {"--exclude-from", ".syncignore"},
-  false: {},
 }
 
 func printVersion() {
@@ -51,111 +48,59 @@ func panicIfErr(err error) {
   }
 }
 
-func readRemoteFromStdin() string {
-  reader := bufio.NewReader(os.Stdin)
-  fmt.Print("Remote Location (eg. user@host:/path/to/remote/dir): ")
-  text, err := reader.ReadString('\n')
-  panicIfErr(err)
-  return text
-}
-
-func readRemoteFromLocations(locations, local string, localIndex int) string {
-  remote := locations[localIndex + len(local) + 1:]
-  remote = remote[:strings.Index(remote, "\n")]
-  return remote
-}
-
 func getDirs() (local, remote string) {
+  // get the current working directory
+  local, err := os.Getwd()
+  panicIfErr(err);
+
   // TODO find a better place for locations
   // open locations.ini
   locationsAbsPath := os.Getenv("HOME") + LOCATIONS_FILE
-  file, err := os.OpenFile(locationsAbsPath, os.O_APPEND|os.O_RDWR, os.ModeAppend)
-  // if there was an error, create the file
-  if err != nil {
-    file, err = os.Create(locationsAbsPath)
-    panicIfErr(err)
-  }
+  file, isNew, err := util.OpenOrCreate(locationsAbsPath, os.O_APPEND|os.O_RDWR, os.ModeAppend)
+  panicIfErr(err)
 
-  // read the file
-  data, err := ioutil.ReadAll(file)
-  panicIfErr(err);
-  locations := string(data)
-
-  // get the current working directory and append it with a space
-  local, err = os.Getwd()
-  panicIfErr(err);
-  local += " "
-
-  // get the current directory's remote match either from the locations file or from stdin
   defer file.Close()
-  localIndex := strings.Index(locations, local);
-  if localIndex == -1 {
-    remote = readRemoteFromStdin()
-    _, err = file.WriteString(local + " " + remote);
-    panicIfErr(err)
-  } else {
-    remote = readRemoteFromLocations(locations, local, localIndex);
+  if !isNew {
+    // read the file
+    data, err := ioutil.ReadAll(file)
+    panicIfErr(err);
+    locations := string(data)
+
+    // get the current directory's remote match either from the locations file or from stdin
+    localIndex := strings.Index(locations, local + " ");
+    if localIndex >= 0 {
+      //remote = util.ReadRemoteFromLocations(locations, local, localIndex);
+      remote = locations[localIndex + len(local) + 2:]
+      remote = remote[:strings.Index(remote, "\n")]
+      return local, remote
+    }
   }
 
-  return local[:len(local) - 1], remote
+  remote, err = util.ReadFromStdin(ENTER_REMOTE_PROMPT)
+  panicIfErr(err)
+  _, err = file.WriteString(local + " " + remote);
+  panicIfErr(err)
+
+  return local, remote
 }
 
-// TODO watch when a new dir is created to add a watcher for it
-func dirWalker(handler func(path string) error) filepath.WalkFunc {
-  return func(path string, info os.FileInfo, err error) error {
-    if err != nil {
-      return err
-    }
-    if info.IsDir() {
-      if err := handler(path); err != nil {
-        fmt.Print("Error: ")
-        fmt.Println(err)
-      }
-    }
-    return nil
+func push(local, remote string, options []string) func(interface{}) {
+
+  // read the command options into cmdOptions
+  cmdOptions := []string{"-aiz", local, remote}
+  if len(options) > 0 {
+    cmdOptions = append(cmdOptions, options...)
   }
-}
-
-// idea from https://github.com/eapache/channels/blob/master/channels.go#L234
-func getChan(i interface{}) chan interface{} {
-  ch := make(chan interface{})
-  go func() {
-    val, ok := reflect.ValueOf(i).Recv()
-    if !ok {
-      close(ch)
-      return
-    }
-    ch <- val.Interface()
-  }()
-  return ch
-}
-
-// idea from here: https://nathanleclaire.com/blog/2014/08/03/write-a-function-similar-to-underscore-dot-jss-debounce-in-golang/
-func debounce(delay time.Duration, event interface{}, eventEmitter interface{}, handler func(interface{})) {
-  eventEmitterChan := getChan(eventEmitter)
-  select {
-  case event = <-eventEmitterChan: /* do nothing */
-  case <-time.After(delay):
-    handler(event)
+  // if the ignore file exists, append it to the command options
+  if _, err := os.Stat(local + "/" + IGNORE_FILE_NAME); !os.IsNotExist(err) {
+    cmdOptions = append(cmdOptions, "--exclude-from", IGNORE_FILE_NAME)
   }
-}
 
-func push(local, remote string, shouldIgnore bool, options []string) func(interface{}) {
   return func(e interface{}) {
-    if (e != nil) {
-      fmt.Println(e.(fsnotify.Event))
-    }
-    cmdOptions := []string{"-aiz", local, remote}
-    if len(options) > 0 {
-      cmdOptions = append(cmdOptions, options...)
-    }
-    if len(IGNORE_FLAG) > 0 {
-      cmdOptions = append(cmdOptions, IGNORE_FLAG[shouldIgnore]...)
-    }
-
     out, err := exec.Command(PUSH_CMD, cmdOptions...).CombinedOutput()
-    fmt.Println(string(string(out)))
-    // TODO add better error handling
+    if len(out) > 0 {
+      fmt.Println(string(string(out)))
+    }
     panicIfErr(err)
   }
 }
@@ -167,12 +112,24 @@ func watch(path string, handler func(interface{})) error {
   }
   defer watcher.Close()
 
-  done := make(chan bool)
+  var wg sync.WaitGroup
+  wg.Add(1)
   go func() {
     for {
       select {
       case event := <-watcher.Events:
-        debounce(100 * time.Millisecond, event, watcher.Events, handler)
+        // if a new dir is created, watch it
+        if event.Op&fsnotify.Create == fsnotify.Create {
+          info, err := os.Lstat(event.Name)
+          panicIfErr(err)
+          if info.IsDir() {
+            err := watcher.Add(event.Name)
+            panicIfErr(err)
+          }
+        }
+
+        // debounce the handler
+        util.Debounce(10 * time.Millisecond, event, watcher.Events, handler)
       case err := <-watcher.Errors:
         fmt.Println("error:", err)
       }
@@ -181,10 +138,10 @@ func watch(path string, handler func(interface{})) error {
 
   err = watcher.Add(path)
   panicIfErr(err)
-  err = filepath.Walk(path, dirWalker(watcher.Add))
+  err = filepath.Walk(path, util.WalkDirs(watcher.Add))
   panicIfErr(err)
 
-  <-done
+  wg.Wait()
   return nil
 }
 
@@ -208,20 +165,13 @@ func main() {
     } else if handler, ok := GENERAL_OPTS[opt]; ok {
       handler()
     } else {
-      fmt.Printf("Option %s is not recognized. Please use one of the following options\n", opt)
-      printHelp()
-      os.Exit(1)
+      fmt.Printf("Option %s is not recognized. call \"sync-push help\" for a list of valid options\n", opt)
     }
   }
 
   local, remote := getDirs()
 
-  shouldIgnore := true
-  if _, err := os.Stat(local + "/.syncignore"); os.IsNotExist(err) {
-    shouldIgnore = false
-  }
+  push(local, remote, pushOpts)(nil)
 
-  push(local, remote, shouldIgnore, pushOpts)(nil)
-
-  watch(local, push(local, remote, shouldIgnore, pushOpts))
+  watch(local, push(local, remote, pushOpts))
 }
