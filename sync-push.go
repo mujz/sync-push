@@ -71,7 +71,7 @@ func getDirs() (local, remote string) {
 		localIndex := strings.Index(locations, local+" ")
 		if localIndex >= 0 {
 			//remote = util.ReadRemoteFromLocations(locations, local, localIndex);
-			remote = locations[localIndex+len(local)+2:]
+			remote = locations[localIndex+len(local)+1:]
 			remote = remote[:strings.Index(remote, "\n")]
 			return local, remote
 		}
